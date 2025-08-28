@@ -91,8 +91,8 @@ Thumbs.db
 
 ```powershell
 flutter doctor        # 환경 점검
-flutter create my_app # 프로젝트 생성
-cd my_app
+flutter create <프로젝트 이름> # 프로젝트 생성
+cd <프로젝트 이름>
 flutter run -d windows  # Windows 앱 실행
 ```
 
