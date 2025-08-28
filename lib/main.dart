@@ -1,8 +1,14 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:camera/camera.dart';
+import 'pages/camera_page.dart';
 
-void main() {
+late List<CameraDescription> cameras; // 카메라 목록 전역 변수
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  cameras = await availableCameras();
   runApp(const MahjongApp());
 }
 
@@ -188,7 +194,15 @@ class _ScoreBoardPageState extends State<ScoreBoardPage> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: FilledButton(
-                          onPressed: () {}, // 쯔모 동작 처리
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) =>
+                                    CameraPage(camera: cameras.first),
+                              ),
+                            );
+                          },
                           child: const Text("쯔모오름"),
                         ),
                       ),
