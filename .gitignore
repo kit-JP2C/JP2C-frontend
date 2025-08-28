@@ -1,0 +1,31 @@
+# Flutter/Dart 기본
+.dart_tool/
+.packages
+.pub/
+build/
+ios/Flutter/Flutter.framework
+ios/.generated/
+android/.gradle/
+android/app/build/
+*.iml
+
+# 환경 파일
+*.lock
+.pub-cache/
+
+# IDE
+.idea/
+.vscode/
+
+# 운영체제별
+.DS_Store
+Thumbs.db
+
+# 비밀 키/환경변수
+*.jks
+*.keystore
+*.pem
+*.p12
+*.key
+*.crt
+*.env
