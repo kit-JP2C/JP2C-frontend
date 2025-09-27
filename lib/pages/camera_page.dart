@@ -47,7 +47,7 @@ class _CameraPageState extends State<CameraPage> {
     try {
       debugPrint("모델 로드 시도 ${retries + 1}: ${DateTime.now()}");
       _interpreter =
-          await Interpreter.fromAsset("assets/model/gray_float32.tflite");
+          await Interpreter.fromAsset("assets/model/color_float32.tflite");
       setState(() {
         _modelLoaded = true;
         _modelError = false;
@@ -149,7 +149,8 @@ class _CameraPageState extends State<CameraPage> {
         MaterialPageRoute(
           builder: (context) => ResultPage(
             imageBytes: bytes,
-            detectedObjects: results.take(5).toList(), // 상위 5개만
+            detectedObjects: results.take(14).toList(), // 상위 5개만
+            //detectedObjects: results,
           ),
         ),
       );
