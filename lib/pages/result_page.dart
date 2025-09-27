@@ -11,83 +11,71 @@ class ResultPage extends StatelessWidget {
     required this.detectedObjects,
   }) : super(key: key);
 
-  // 한글 패 이름으로 변환
-  String convertLabel(String label) {
-    final Map<String, String> hanMap = {
-      '1m': '1만',
-      '2m': '2만',
-      '3m': '3만',
-      '4m': '4만',
-      '5m': '5만',
-      '6m': '6만',
-      '7m': '7만',
-      '8m': '8만',
-      '9m': '9만',
-      '1p': '1통',
-      '2p': '2통',
-      '3p': '3통',
-      '4p': '4통',
-      '5p': '5통',
-      '6p': '6통',
-      '7p': '7통',
-      '8p': '8통',
-      '9p': '9통',
-      '1s': '1삭',
-      '2s': '2삭',
-      '3s': '3삭',
-      '4s': '4삭',
-      '5s': '5삭',
-      '6s': '6삭',
-      '7s': '7삭',
-      '8s': '8삭',
-      '9s': '9삭',
-      '1z': '동',
-      '2z': '남',
-      '3z': '서',
-      '4z': '북',
-      '5z': '백',
-      '6z': '발',
-      '7z': '중',
+  // 라벨 변환 (영문 → 한글)
+  String _translateLabel(String label) {
+    final mapping = {
+      'm': '만',
+      'p': '통',
+      's': '삭',
+      'z': '자',
       'back': '뒷면',
     };
-    return hanMap[label] ?? label;
+
+    if (label == 'back') return '뒷면';
+
+    final number = label.substring(0, label.length - 1);
+    final suit = label[label.length - 1];
+    return "$number${mapping[suit] ?? suit}";
   }
 
   @override
   Widget build(BuildContext context) {
-    // confidence threshold
-    const double threshold = 0.01;
-
-    // threshold 이상만 필터링
-    final filteredObjects = detectedObjects
-        .map((obj) => {
-              'label': convertLabel(obj['label']),
-              'confidence': obj['confidence'] as double,
-            })
-        .where((obj) => (obj['confidence'] as double) > threshold)
+    // confidence 0.2 이상만 표시
+    final filteredResults = detectedObjects
+        .where((obj) => (obj['confidence'] as double) >= 0.01)
         .toList();
 
+    // 라벨만 뽑아서 한 줄 문자열 생성
+    final detectedLabels =
+        filteredResults.map((obj) => _translateLabel(obj['label'])).join(', ');
+
     return Scaffold(
-      appBar: AppBar(title: const Text('인식 결과')),
+      appBar: AppBar(title: const Text('Detection Results')),
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 이미지
-            SizedBox(
-              width: double.infinity,
-              child: Image.memory(imageBytes, fit: BoxFit.contain),
+            RotatedBox(
+              quarterTurns: 3, // 왼쪽으로 90도 회전
+              child: Image.memory(
+                imageBytes,
+                fit: BoxFit.contain,
+              ),
             ),
             const SizedBox(height: 16),
-            // 결과 리스트
+
+            // ✅ 요약 텍스트 추가 위치
+            if (detectedLabels.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Text(
+                  "인식 결과: $detectedLabels",
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+
+            // ✅ 기존 리스트 (상세 결과)
             ListView.builder(
-              physics: const NeverScrollableScrollPhysics(),
               shrinkWrap: true,
-              itemCount: filteredObjects.length,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: filteredResults.length,
               itemBuilder: (context, index) {
-                final obj = filteredObjects[index];
+                final obj = filteredResults[index];
                 return ListTile(
-                  title: Text(obj['label']),
+                  title: Text(_translateLabel(obj['label'])),
                   subtitle: Text(
                     'Confidence: ${(obj['confidence'] * 100).toStringAsFixed(2)}%',
                   ),

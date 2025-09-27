@@ -124,18 +124,26 @@ class _CameraPageState extends State<CameraPage> {
 
 // ─── top-K 결과 생성 (List<double> 처리) ─────────────
       List<Map<String, dynamic>> results = [];
-      final len = outputBuffer[0].length < labels.length
-          ? outputBuffer[0].length
-          : labels.length;
 
-      for (int i = 0; i < len; i++) {
-        final scoreList = outputBuffer[0][i]; // [8400]
-        final confidence = (scoreList is List<double>)
-            ? scoreList.reduce((a, b) => a > b ? a : b)
-            : 0.0;
+      for (var i = 0; i < outputBuffer[0].length; i++) {
+        final detection = outputBuffer[0][i]; // [x, y, w, h, conf, c1, c2, ...]
+        final conf = detection[4] as double;
+        if (conf < 0.3) continue; // confidence threshold (30% 이상만)
+
+        final classScores = detection.sublist(5);
+        final maxIdx = classScores.indexWhere(
+            (s) => s == classScores.reduce((a, b) => a > b ? a : b));
+        final label = labels[maxIdx];
+
         results.add({
-          'label': labels[i].trim(),
-          'confidence': confidence,
+          "rect": Rect.fromLTWH(
+            detection[0],
+            detection[1],
+            detection[2],
+            detection[3],
+          ),
+          "label": label,
+          "confidence": conf,
         });
       }
 
@@ -149,8 +157,8 @@ class _CameraPageState extends State<CameraPage> {
         MaterialPageRoute(
           builder: (context) => ResultPage(
             imageBytes: bytes,
-            detectedObjects: results.take(14).toList(), // 상위 5개만
-            //detectedObjects: results,
+            //detectedObjects: results.take(14).toList(), // 상위 5개만
+            detectedObjects: results,
           ),
         ),
       );
