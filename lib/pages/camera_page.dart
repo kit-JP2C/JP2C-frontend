@@ -1,9 +1,12 @@
+import 'dart:math';
+import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // ← 여기 추가
+import 'package:flutter/services.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:image/image.dart' as img;
 import 'package:mahjong_app/pages/result_page.dart';
+import 'package:fluttertoast/fluttertoast.dart';
 
 class CameraPage extends StatefulWidget {
   final CameraDescription camera;
@@ -18,21 +21,24 @@ class _CameraPageState extends State<CameraPage> {
   late Future<void> _initializeControllerFuture;
 
   Uint8List? capturedImageBytes;
-  List<String> detectedObjects = [];
+  List<Map<String, dynamic>> detectedObjects = [];
 
   Interpreter? _interpreter;
 
   bool _modelLoaded = false;
   bool _modelError = false;
 
+  List<String> labels = [];
+
   @override
   void initState() {
     super.initState();
     _controller = CameraController(widget.camera, ResolutionPreset.high);
 
-    // 카메라 초기화 후 모델 로드
-    _initializeControllerFuture = _controller.initialize().then((_) {
-      _loadModel();
+    // 카메라 초기화 후 모델 + 라벨 로드
+    _initializeControllerFuture = _controller.initialize().then((_) async {
+      await _loadModel();
+      await _loadLabels();
     });
   }
 
@@ -66,27 +72,34 @@ class _CameraPageState extends State<CameraPage> {
     }
   }
 
-  dynamic _createNestedList(List<int> shape) {
-    if (shape.length == 1) return List<double>.filled(shape[0], 0.0);
-    return List.generate(shape[0], (_) => _createNestedList(shape.sublist(1)));
+  Future<void> _loadLabels() async {
+    try {
+      final raw = await rootBundle.loadString('assets/labels.txt');
+      setState(() {
+        labels = raw.split('\n').where((e) => e.trim().isNotEmpty).toList();
+      });
+      debugPrint("✅ 라벨 로드 완료: ${labels.length}개");
+    } catch (e) {
+      debugPrint("❌ 라벨 로드 실패: $e");
+    }
   }
 
   Future<void> _takePictureAndDetect() async {
     try {
       await _initializeControllerFuture;
-      if (_interpreter == null) return;
+      if (_interpreter == null) throw Exception("Interpreter not loaded");
 
       final XFile image = await _controller.takePicture();
       final bytes = await image.readAsBytes();
-
-      // 이미지 디코딩
       final rawImg = img.decodeImage(bytes);
-      if (rawImg == null) return;
+      if (rawImg == null) throw Exception("Failed to decode image");
 
       final inputShape = _interpreter!.getInputTensor(0).shape;
+      debugPrint("Input Tensor Shape: $inputShape");
       final inputHeight = inputShape[1];
       final inputWidth = inputShape[2];
 
+      // 입력 이미지 리사이즈 및 정규화
       final resized =
           img.copyResize(rawImg, width: inputWidth, height: inputHeight);
       final rgba = resized.getBytes();
@@ -96,74 +109,98 @@ class _CameraPageState extends State<CameraPage> {
         (_) => List.generate(inputHeight, (y) {
           return List.generate(inputWidth, (x) {
             final idx = (y * inputWidth + x) * 4;
-            if (idx + 2 >= rgba.length) return [0.0, 0.0, 0.0];
+            final safeIdx = min(idx, rgba.length - 3);
             return [
-              rgba[idx].toDouble() / 255.0,
-              rgba[idx + 1].toDouble() / 255.0,
-              rgba[idx + 2].toDouble() / 255.0
+              rgba[safeIdx].toDouble() / 255.0,
+              rgba[safeIdx + 1].toDouble() / 255.0,
+              rgba[safeIdx + 2].toDouble() / 255.0
             ];
           });
         }),
       );
 
-// ─── outputBuffer 3차원 생성 ─────────────────────────
-      final outputShape =
-          _interpreter!.getOutputTensor(0).shape; // [1, 39, 8400] 등
-      final outputBuffer = List.generate(
+      // 출력 버퍼 준비
+      final outputShape = _interpreter!.getOutputTensor(0).shape;
+      debugPrint("Output Tensor Shape: $outputShape");
+
+      List<List<List<double>>> outputBuffer = List.generate(
         outputShape[0], // 1
         (_) => List.generate(
           outputShape[1], // 39
-          (_) => List.generate(outputShape[2], (_) => 0.0), // 8400
+          (_) => List.filled(outputShape[2], 0.0), // 8400
         ),
       );
-      _interpreter!.run(input, outputBuffer);
 
-// ─── labels.txt 읽기 ─────────────────────────
-      final labelsStr = await rootBundle.loadString('assets/model/labels.txt');
-      final labels = labelsStr.split('\n');
+      try {
+        _interpreter!.run(input, outputBuffer);
+        debugPrint("Interpreter run successful");
+      } catch (e) {
+        debugPrint("Interpreter run failed: $e");
+        Fluttertoast.showToast(
+          msg: "Interpreter run error: $e",
+          toastLength: Toast.LENGTH_LONG,
+          gravity: ToastGravity.BOTTOM,
+          backgroundColor: Colors.red,
+          textColor: Colors.white,
+          fontSize: 16,
+        );
+        return;
+      }
 
-// ─── top-K 결과 생성 (List<double> 처리) ─────────────
+      // 결과 처리
+      final numDetections = outputShape[1];
+      final numClasses = outputShape[2] - 5;
+
       List<Map<String, dynamic>> results = [];
 
-      for (var i = 0; i < outputBuffer[0].length; i++) {
-        final detection = outputBuffer[0][i]; // [x, y, w, h, conf, c1, c2, ...]
-        final conf = detection[4] as double;
-        if (conf < 0.3) continue; // confidence threshold (30% 이상만)
+      for (int i = 0; i < numDetections; i++) {
+        final detection = outputBuffer[0][i];
+        final conf = detection[4];
+        if (conf < 0.01) continue; // threshold 낮춤
 
         final classScores = detection.sublist(5);
-        final maxIdx = classScores.indexWhere(
-            (s) => s == classScores.reduce((a, b) => a > b ? a : b));
-        final label = labels[maxIdx];
+        final maxScore = classScores.reduce(max);
+        final maxIdx = classScores.indexOf(maxScore);
+
+        if (maxIdx >= labels.length) continue;
+
+        // YOLO bbox는 보통 cx, cy, w, h 기준임 → 좌표 변환
+        final cx = detection[0] * rawImg.width;
+        final cy = detection[1] * rawImg.height;
+        final w = detection[2] * rawImg.width;
+        final h = detection[3] * rawImg.height;
 
         results.add({
-          "rect": Rect.fromLTWH(
-            detection[0],
-            detection[1],
-            detection[2],
-            detection[3],
-          ),
-          "label": label,
+          "rect": Rect.fromLTWH(cx - w / 2, cy - h / 2, w, h),
+          "label": labels[maxIdx],
           "confidence": conf,
         });
       }
 
-// ─── confidence 순으로 정렬 ─────────────────────────
       results.sort((a, b) =>
           (b['confidence'] as double).compareTo(a['confidence'] as double));
+      debugPrint("Detected objects count: ${results.length}");
+      debugPrint("detectedObjects: $results");
 
-      // ResultPage로 이동
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (context) => ResultPage(
             imageBytes: bytes,
-            //detectedObjects: results.take(14).toList(), // 상위 5개만
             detectedObjects: results,
           ),
         ),
       );
-    } catch (e) {
-      debugPrint("촬영/인식 에러: $e");
+    } catch (e, stack) {
+      debugPrint("General error: $e\n$stack");
+      Fluttertoast.showToast(
+        msg: "촬영/인식 에러: $e",
+        toastLength: Toast.LENGTH_LONG,
+        gravity: ToastGravity.BOTTOM,
+        backgroundColor: Colors.red,
+        textColor: Colors.white,
+        fontSize: 16,
+      );
     }
   }
 
@@ -261,7 +298,7 @@ class _CameraPageState extends State<CameraPage> {
                           children: detectedObjects
                               .map(
                                 (obj) => Text(
-                                  obj,
+                                  "${obj['label']} ${(obj['confidence'] * 100).toStringAsFixed(1)}%",
                                   style: const TextStyle(
                                     color: Colors.white,
                                     fontWeight: FontWeight.bold,
