@@ -15,11 +15,25 @@ class ResultPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Detection Results')),
-      body: Column(
-        children: [
-          Image.memory(imageBytes),
-          Expanded(
-            child: ListView.builder(
+      body: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 이미지 크기 제한
+            SizedBox(
+              width: double.infinity,
+              child: Image.memory(
+                imageBytes,
+                fit: BoxFit.contain,
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // 인식 결과 리스트
+            ListView.builder(
+              physics:
+                  const NeverScrollableScrollPhysics(), // SingleChildScrollView 안에서 스크롤 충돌 방지
+              shrinkWrap: true, // 내용 크기에 맞게 높이 제한
               itemCount: detectedObjects.length,
               itemBuilder: (context, index) {
                 final obj = detectedObjects[index];
@@ -31,8 +45,8 @@ class ResultPage extends StatelessWidget {
                 );
               },
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

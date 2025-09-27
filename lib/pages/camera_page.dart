@@ -1,8 +1,9 @@
-import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // ← 여기 추가
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:image/image.dart' as img;
+import 'package:mahjong_app/pages/result_page.dart';
 
 class CameraPage extends StatefulWidget {
   final CameraDescription camera;
@@ -45,7 +46,8 @@ class _CameraPageState extends State<CameraPage> {
   Future<void> _loadModel({int retries = 0}) async {
     try {
       debugPrint("모델 로드 시도 ${retries + 1}: ${DateTime.now()}");
-      _interpreter = await Interpreter.fromAsset("model/gray_float32.tflite");
+      _interpreter =
+          await Interpreter.fromAsset("assets/model/gray_float32.tflite");
       setState(() {
         _modelLoaded = true;
         _modelError = false;
@@ -77,73 +79,80 @@ class _CameraPageState extends State<CameraPage> {
       final XFile image = await _controller.takePicture();
       final bytes = await image.readAsBytes();
 
-      setState(() {
-        capturedImageBytes = bytes;
-      });
-
+      // 이미지 디코딩
       final rawImg = img.decodeImage(bytes);
       if (rawImg == null) return;
 
-      // 모델 입력 크기
       final inputShape = _interpreter!.getInputTensor(0).shape;
       final inputHeight = inputShape[1];
       final inputWidth = inputShape[2];
 
-      final resized = img.copyResize(
-        rawImg,
-        width: inputWidth,
-        height: inputHeight,
-      );
-
-      // RGBA 바이트 배열
+      final resized =
+          img.copyResize(rawImg, width: inputWidth, height: inputHeight);
       final rgba = resized.getBytes();
 
-      // 입력 텐서 생성 [1, h, w, 3]
       final input = List.generate(
         1,
         (_) => List.generate(inputHeight, (y) {
           return List.generate(inputWidth, (x) {
             final idx = (y * inputWidth + x) * 4;
-            final r = rgba[idx].toDouble() / 255.0;
-            final g = rgba[idx + 1].toDouble() / 255.0;
-            final b = rgba[idx + 2].toDouble() / 255.0;
-            return [r, g, b];
+            if (idx + 2 >= rgba.length) return [0.0, 0.0, 0.0];
+            return [
+              rgba[idx].toDouble() / 255.0,
+              rgba[idx + 1].toDouble() / 255.0,
+              rgba[idx + 2].toDouble() / 255.0
+            ];
           });
         }),
       );
 
-      // 출력 버퍼 생성
-      final outputShape = _interpreter!.getOutputTensor(0).shape.toList();
-      final outputBuffer = _createNestedList(outputShape);
-
+// ─── outputBuffer 3차원 생성 ─────────────────────────
+      final outputShape =
+          _interpreter!.getOutputTensor(0).shape; // [1, 39, 8400] 등
+      final outputBuffer = List.generate(
+        outputShape[0], // 1
+        (_) => List.generate(
+          outputShape[1], // 39
+          (_) => List.generate(outputShape[2], (_) => 0.0), // 8400
+        ),
+      );
       _interpreter!.run(input, outputBuffer);
 
-      // 간단 출력 파싱
-      List<String> results = [];
-      try {
-        if (outputBuffer is List && outputBuffer.isNotEmpty) {
-          var first = outputBuffer[0];
-          if (first is List) {
-            for (int i = 0; i < first.length && i < 5; i++) {
-              results.add("out[0][$i] => ${first[i].toString()}");
-            }
-          } else {
-            for (int i = 0; i < (outputBuffer as List).length && i < 10; i++) {
-              results.add("out[$i] = ${(outputBuffer as List)[i].toString()}");
-            }
-          }
-        }
-      } catch (e) {
-        results.add('파싱 실패: $e');
+// ─── labels.txt 읽기 ─────────────────────────
+      final labelsStr = await rootBundle.loadString('assets/model/labels.txt');
+      final labels = labelsStr.split('\n');
+
+// ─── top-K 결과 생성 (List<double> 처리) ─────────────
+      List<Map<String, dynamic>> results = [];
+      final len = outputBuffer[0].length < labels.length
+          ? outputBuffer[0].length
+          : labels.length;
+
+      for (int i = 0; i < len; i++) {
+        final scoreList = outputBuffer[0][i]; // [8400]
+        final confidence = (scoreList is List<double>)
+            ? scoreList.reduce((a, b) => a > b ? a : b)
+            : 0.0;
+        results.add({
+          'label': labels[i].trim(),
+          'confidence': confidence,
+        });
       }
 
-      setState(() {
-        detectedObjects = results;
-      });
+// ─── confidence 순으로 정렬 ─────────────────────────
+      results.sort((a, b) =>
+          (b['confidence'] as double).compareTo(a['confidence'] as double));
 
-      ScaffoldMessenger.of(
+      // ResultPage로 이동
+      Navigator.push(
         context,
-      ).showSnackBar(const SnackBar(content: Text("촬영 및 추론 완료")));
+        MaterialPageRoute(
+          builder: (context) => ResultPage(
+            imageBytes: bytes,
+            detectedObjects: results.take(5).toList(), // 상위 5개만
+          ),
+        ),
+      );
     } catch (e) {
       debugPrint("촬영/인식 에러: $e");
     }
@@ -182,34 +191,33 @@ class _CameraPageState extends State<CameraPage> {
                                 style: TextStyle(fontSize: 18),
                               )
                             : (_modelLoaded
-                                  ? const Text(
-                                      "촬영 & 인식",
-                                      key: ValueKey("loaded"),
-                                      style: TextStyle(fontSize: 18),
-                                    )
-                                  : Row(
-                                      key: const ValueKey("loading"),
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      children: const [
-                                        SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                            valueColor:
-                                                AlwaysStoppedAnimation<Color>(
-                                                  Colors.white,
-                                                ),
+                                ? const Text(
+                                    "촬영 & 인식",
+                                    key: ValueKey("loaded"),
+                                    style: TextStyle(fontSize: 18),
+                                  )
+                                : Row(
+                                    key: const ValueKey("loading"),
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: const [
+                                      SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                            Colors.white,
                                           ),
                                         ),
-                                        SizedBox(width: 12),
-                                        Text(
-                                          "모델 로딩 중...",
-                                          style: TextStyle(fontSize: 16),
-                                        ),
-                                      ],
-                                    )),
+                                      ),
+                                      SizedBox(width: 12),
+                                      Text(
+                                        "모델 로딩 중...",
+                                        style: TextStyle(fontSize: 16),
+                                      ),
+                                    ],
+                                  )),
                       ),
                     ),
                   ),
